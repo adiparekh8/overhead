@@ -1,0 +1,76 @@
+# XcodeGen spec for Overhead.xcodeproj.
+# The project is checked in; re-create it with `xcodegen generate` after
+# adding or removing source files.
+name: Overhead
+options:
+  bundleIdPrefix: dev.overhead
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Sign to run locally; no developer account needed.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+targets:
+  OverheadCore:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/OverheadCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.overhead.OverheadCore
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_TESTABILITY: YES
+        DEFINES_MODULE: YES
+  Overhead:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/Overhead
+      - path: Support/Info.plist
+        buildPhase: none
+    dependencies:
+      - target: OverheadCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.overhead.Overhead
+        INFOPLIST_FILE: Support/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+  OverheadCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/OverheadCoreTests
+        excludes:
+          - Fixtures
+    dependencies:
+      - target: OverheadCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.overhead.OverheadCoreTests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Overhead:
+    build:
+      targets:
+        Overhead: all
+        OverheadCoreTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - OverheadCoreTests
+    archive:
+      config: Release
