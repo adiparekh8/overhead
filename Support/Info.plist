@@ -24,6 +24,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSFocusStatusUsageDescription</key>
+	<string>Overhead holds back flyover animations while a Focus is on.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>Overhead uses your location to find the aircraft flying above you.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

@@ -82,6 +82,15 @@ enum Diagnostics {
             return view.subviews.lazy.compactMap { button(in: $0) }.first
         }
         setvbuf(stdout, nil, _IOLBF, 0)
+        if CommandLine.arguments.contains("--flyover-only") {
+            // Just the flyover, with the card closed: for measuring its cost.
+            try? await Task.sleep(for: .seconds(6))
+            AppModel.shared.playPreview(FlyoverPreview(shape: .narrowbody, paint: "UAL", sky: .night, leftToRight: true, banner: true))
+            print("self-test: flyover started, flying = \(FlyoverController.shared.isFlying)")
+            try? await Task.sleep(for: .seconds(12))
+            print("self-test: flyover done, flying = \(FlyoverController.shared.isFlying)")
+            return
+        }
         try? await Task.sleep(for: .seconds(4))
         guard let statusButton = NSApp.windows.lazy.compactMap({ button(in: $0.contentView) }).first else {
             print("self-test: no menu bar item found")
@@ -101,7 +110,9 @@ enum Diagnostics {
             try? bitmap.representation(using: .png, properties: [:])?.write(to: url)
             print("self-test: wrote \(url.path) (\(Int(view.bounds.width)) x \(Int(view.bounds.height)) pt)")
         }
-        AppModel.shared.previewFlyover()
+        print("self-test: focus access = \(SystemState.focusAccess), focus on = \(String(describing: SystemState.focusOn)), full screen = \(SystemState.isFullScreen), mirrored = \(SystemState.isMirrored)")
+        print("self-test: sky darkness here = \(AppModel.shared.skyDarkness), block = \(String(describing: AppModel.shared.flyoverRules.block(SystemState.conditions())))")
+        AppModel.shared.playPreview(FlyoverPreview(shape: .narrowbody, paint: "UAL", sky: .night, leftToRight: true, banner: true))
         try? await Task.sleep(for: .seconds(1))
         let overlay = NSApp.windows.first { $0.ignoresMouseEvents && $0.isVisible }
         print("self-test: flyover window visible = \(overlay != nil), frame = \(overlay?.frame ?? .zero), flying = \(FlyoverController.shared.isFlying)")
@@ -155,28 +166,74 @@ enum Diagnostics {
             write(CardView(model: empty, animated: false).background(backdrop),
                   scale: 2, to: folder.appendingPathComponent("card-empty.png"))
 
-            // Every silhouette, as it appears in a flyover, on a sky and on a dark backdrop.
-            let names: [(AircraftShape, String, String)] = [
-                (.superJumbo, "A6-EVN", "Airbus A380-800"), (.jumbo, "N863GT", "Boeing 747-8F"),
-                (.quadWidebody, "D-AIGZ", "Airbus A340-300"), (.widebody, "N2749U", "Boeing 777-300ER"),
-                (.narrowbody, "N8880G", "2021 Boeing 737-8"), (.rearEngineJet, "N548CA", "Bombardier CRJ-700"),
-                (.businessJet, "N628TS", "2015 Gulfstream G650ER"), (.turboprop, "N435QX", "De Havilland Dash 8-400"),
-                (.pistonSingle, "N172SP", "2003 Cessna 172S"), (.helicopter, "N44PD", "Robinson R44 II"),
-            ]
-            let sheet = VStack(alignment: .leading, spacing: 14) {
-                ForEach(Array(names.enumerated()), id: \.offset) { index, entry in
-                    FlyoverAircraftView(info: FlyoverInfo(
-                        shape: entry.0, title: entry.1, subtitle: entry.2, leftToRight: index % 4 != 3,
-                        duration: 9, trend: index == 4 ? .climbing : .level, contrail: index == 3 || index == 6
-                    ))
-                    .frame(width: 440, alignment: .center)
-                }
+            // Flyover art. Day sky, dusk and night backdrops.
+            let daySky = LinearGradient(colors: [Color(red: 0.36, green: 0.6, blue: 0.9), Color(red: 0.72, green: 0.84, blue: 0.95)], startPoint: .top, endPoint: .bottom)
+            let duskSky = LinearGradient(colors: [Color(red: 0.16, green: 0.18, blue: 0.36), Color(red: 0.82, green: 0.47, blue: 0.36)], startPoint: .top, endPoint: .bottom)
+            let nightSky = LinearGradient(colors: [Color(red: 0.02, green: 0.03, blue: 0.08), Color(red: 0.07, green: 0.09, blue: 0.17)], startPoint: .top, endPoint: .bottom)
+
+            func scene(_ shape: AircraftShape, paint: String, sky: FlyoverPreview.Sky = .day,
+                       east: Bool = true, banner: Bool = false, time: Double = 0.4) -> FlyoverSceneView {
+                let preview = FlyoverPreview(shape: shape, paint: paint, sky: sky, leftToRight: east, banner: banner)
+                return FlyoverSceneView(info: preview.info(automaticDarkness: 0), time: time)
             }
-            .padding(20)
-            write(HStack(spacing: 0) {
-                sheet.background(LinearGradient(colors: [Color(red: 0.36, green: 0.6, blue: 0.9), Color(red: 0.7, green: 0.83, blue: 0.95)], startPoint: .top, endPoint: .bottom))
-                sheet.background(Color(white: 0.12))
-            }, scale: 1.5, to: folder.appendingPathComponent("flyover.png"))
+            func grid(_ scenes: [FlyoverSceneView], columns: Int, cell: CGSize) -> some View {
+                let rows = stride(from: 0, to: scenes.count, by: columns).map { Array(scenes[$0..<min($0 + columns, scenes.count)]) }
+                return VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 0) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, item in
+                                item.frame(width: cell.width, height: cell.height)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+            }
+
+            // 1. Every shape, private company paint, so the lettering shows.
+            let shapesA = Array(AircraftShape.allCases.prefix(8))
+            let shapesB = Array(AircraftShape.allCases.dropFirst(8))
+            write(grid(shapesA.map { scene($0, paint: "company") }, columns: 2, cell: CGSize(width: 400, height: 190)).background(daySky),
+                  scale: 1.5, to: folder.appendingPathComponent("shapes-1.png"))
+            write(grid(shapesB.map { scene($0, paint: "company") }, columns: 2, cell: CGSize(width: 400, height: 190)).background(daySky),
+                  scale: 1.5, to: folder.appendingPathComponent("shapes-2.png"))
+
+            // 2. Airline paint on the narrow-body, plus freighters.
+            let liveries = ["UAL", "DAL", "AAL", "SWA", "ASA", "JBU", "NKS", "FFT", "HAL", "ACA", "BAW", "DLH", "KLM", "RYR", "UAE", "QFA"]
+            var painted = liveries.map { scene(.narrowbody, paint: $0) }
+            painted.append(scene(.cargoWidebody, paint: "FDX"))
+            painted.append(scene(.cargoWidebody, paint: "UPS"))
+            painted.append(scene(.pistonSingle, paint: "individual"))
+            painted.append(scene(.largeBusinessJet, paint: "individual"))
+            write(grid(painted, columns: 4, cell: CGSize(width: 310, height: 160)).background(daySky),
+                  scale: 1.3, to: folder.appendingPathComponent("airlines.png"))
+
+            // 3. Banners: eastbound, westbound, and three moments of the ripple.
+            write(grid([
+                scene(.narrowbody, paint: "UAL", banner: true, time: 0.0),
+                scene(.narrowbody, paint: "UAL", banner: true, time: 0.2),
+                scene(.narrowbody, paint: "UAL", banner: true, time: 0.4),
+                scene(.widebody, paint: "BAW", east: false, banner: true, time: 0.3),
+                scene(.largeBusinessJet, paint: "company", banner: true, time: 0.1),
+                scene(.pistonSingle, paint: "individual", east: false, banner: true, time: 0.5),
+            ], columns: 1, cell: CGSize(width: 640, height: 175)).background(daySky),
+                  scale: 1.3, to: folder.appendingPathComponent("banners.png"))
+
+            // 4. Dusk and night, with lights. Two instants so both the beacon
+            //    (first column) and the strobes (second column) are caught lit.
+            write(grid([
+                scene(.narrowbody, paint: "DAL", sky: .dusk, banner: true, time: 0.05),
+                scene(.largeBusinessJet, paint: "company", sky: .dusk, east: false, time: 0.72),
+            ], columns: 1, cell: CGSize(width: 640, height: 175)).background(duskSky),
+                  scale: 1.3, to: folder.appendingPathComponent("dusk.png"))
+            write(grid([
+                scene(.narrowbody, paint: "UAL", sky: .night, banner: true, time: 0.05),
+                scene(.widebody, paint: "UAE", sky: .night, east: false, banner: true, time: 0.72),
+                scene(.largeBusinessJet, paint: "company", sky: .night, time: 0.05),
+                scene(.helicopter, paint: "individual", sky: .night, east: false, time: 0.72),
+                scene(.pistonSingle, paint: "individual", sky: .night, time: 0.72),
+            ], columns: 1, cell: CGSize(width: 640, height: 175)).background(nightSky),
+                  scale: 1.3, to: folder.appendingPathComponent("night.png"))
 
             // The menu bar item at a few headings, on light and dark bars.
             let items = VStack(alignment: .leading, spacing: 6) {

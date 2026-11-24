@@ -57,16 +57,54 @@ Only a position rounded to two decimal places (about 1 km) is sent to the API.
 
 ## Flyover
 
-When a new aircraft comes within 5 nautical miles (straight-line), a
-silhouette of it flies across the top of the screen in the direction it is
-really heading, captioned with its tail number and model. The silhouette is
-one of ten airframe shapes (A380, 747, four-engine wide-body, wide-body,
-narrow-body, rear-engine jet, business jet, turboprop, piston single,
-helicopter) chosen from the aircraft's ICAO type code. Faster aircraft cross
-faster, climbing ones fly nose-up, and jets above 26,000 ft trail a contrail.
-Each aircraft is shown once per half hour. The overlay ignores clicks.
+When a new aircraft comes within 5 nautical miles (straight-line), it flies
+across the top of the screen in the direction it is really heading.
 
-Turn it off, change the distance or play a preview in Settings.
+- **Shape.** One of 16 side-on shapes chosen from the ICAO type code, with a
+  fallback by size category: A380, 747, four-engine wide-body, wide-body
+  twin, wide-body freighter, narrow-body, rear-engine regional jet, twin
+  turboprop, large and small business jets, single and twin piston,
+  helicopter, fighter, military transport, glider. Bigger aircraft are drawn
+  bigger.
+- **Paint.** The first three letters of the callsign give the airline; 55
+  airlines have a palette for fuselage, tail, engines and stripe. Colors
+  only, no logos, and the colors are approximations. Private aircraft are
+  white and grey with one accent color derived from the tail number.
+- **Lettering.** A private aircraft owned by a company, LLC, trust or
+  government carries the owner's name along the fuselage. Any other owner
+  gets the tail number: a person's name is never drawn.
+- **Banner.** A towed banner shows the route ("UA512 · San Francisco →
+  Newark") when ADSB.lol's route endpoint returns one that fits the
+  aircraft's position and heading. Private flights tow their callsign or tail
+  number. See the note below.
+- **Sky.** Day, dusk or night comes from the sun's position at your location.
+  At night the aircraft is dark with lit windows and navigation lights: green
+  on the wingtip nearest you when it flies left to right (you are looking at
+  its right side), red when it flies right to left, white on the tail, a red
+  beacon and white double-flash strobes.
+
+**Route data.** On 2026-11-23 `POST /api/0/routeset` answered every request
+with HTTP 201 and an empty body, so no real route could be shown and the
+response format in `Route.swift` is unconfirmed. Until the endpoint returns
+data, airline flights fly without a banner.
+
+### When flyovers stay away
+
+Settings has Pause, quiet hours, and three automatic checks:
+
+- **Full screen**: detected, using the system presentation options and the
+  window list.
+- **Focus**: detected only after you press Allow in Settings and approve the
+  macOS prompt, and only for a Focus that has Share Focus Status switched on.
+- **Screen sharing or recording**: macOS has no public way for an app to know
+  another app is capturing the screen, and windows can no longer be excluded
+  from capture. Overhead only detects a mirrored display. Pause it before a
+  call.
+
+The menu bar item and the card keep updating while flyovers are held back.
+
+Settings also has a Preview section that plays any shape, paint, sky and
+direction on demand.
 
 ## Layout
 

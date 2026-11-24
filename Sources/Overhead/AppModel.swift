@@ -53,6 +53,14 @@ final class AppModel {
     var flyoverEnabled: Bool { didSet { save(flyoverEnabled, "flyoverEnabled") } }
     /// How close (straight-line, nautical miles) counts as flying over.
     var flyoverRangeNM: Double { didSet { save(flyoverRangeNM, "flyoverRangeNM") } }
+    var flyoversPaused: Bool { didSet { save(flyoversPaused, "flyoversPaused"); if !flyoversPaused { flyoverBlock = nil } } }
+    var quietHoursEnabled: Bool { didSet { save(quietHoursEnabled, "quietHoursEnabled") } }
+    /// Minutes after midnight.
+    var quietStartMinutes: Int { didSet { save(quietStartMinutes, "quietStartMinutes") } }
+    var quietEndMinutes: Int { didSet { save(quietEndMinutes, "quietEndMinutes") } }
+    var respectFocus: Bool { didSet { save(respectFocus, "respectFocus") } }
+    var respectFullScreen: Bool { didSet { save(respectFullScreen, "respectFullScreen") } }
+    var respectMirroring: Bool { didSet { save(respectMirroring, "respectMirroring") } }
     var launchAtLogin = false
     var launchAtLoginError: String?
 
@@ -73,6 +81,9 @@ final class AppModel {
     private(set) var menuHeading: Double = 0
     private(set) var menuContentOpacity: Double = 1
     private(set) var menuHasAircraft = false
+    /// Why the most recent flyover was held back, if it was.
+    private(set) var flyoverBlock: FlyoverBlock?
+    private(set) var focusAccess: SystemState.FocusAccess = .notAsked
     /// True while the card is actually on screen.
     private(set) var cardOpen = false
 
@@ -81,6 +92,7 @@ final class AppModel {
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let client = ADSBClient()
     @ObservationIgnored private let location = LocationProvider()
+    @ObservationIgnored private let routes = RouteClient()
     @ObservationIgnored private var registry: Registry?
     @ObservationIgnored private var registryModified: Date?
     @ObservationIgnored private var loopTask: Task<Void, Never>?
@@ -106,6 +118,13 @@ final class AppModel {
         manualLongitude = d.string(forKey: "manualLongitude") ?? ""
         flyoverEnabled = d.object(forKey: "flyoverEnabled") as? Bool ?? true
         flyoverRangeNM = d.object(forKey: "flyoverRangeNM") as? Double ?? 5
+        flyoversPaused = d.bool(forKey: "flyoversPaused")
+        quietHoursEnabled = d.bool(forKey: "quietHoursEnabled")
+        quietStartMinutes = d.object(forKey: "quietStartMinutes") as? Int ?? 22 * 60
+        quietEndMinutes = d.object(forKey: "quietEndMinutes") as? Int ?? 7 * 60
+        respectFocus = d.object(forKey: "respectFocus") as? Bool ?? true
+        respectFullScreen = d.object(forKey: "respectFullScreen") as? Bool ?? true
+        respectMirroring = d.object(forKey: "respectMirroring") as? Bool ?? true
     }
 
     private func save(_ value: Any, _ key: String) {
@@ -120,6 +139,7 @@ final class AppModel {
         isLive = true
         launchAtLogin = SMAppService.mainApp.status == .enabled
         openRegistryIfNeeded()
+        refreshFocusAccess()
 
         location.onChange = { [weak self] in
             Task { @MainActor in self?.locationChanged() }
@@ -307,6 +327,23 @@ final class AppModel {
 
     // MARK: Flyover
 
+    var flyoverRules: FlyoverRules {
+        var rules = FlyoverRules()
+        rules.paused = flyoversPaused
+        rules.quietHoursEnabled = quietHoursEnabled
+        rules.quietHours = QuietHours(start: quietStartMinutes, end: quietEndMinutes)
+        rules.respectFocus = respectFocus
+        rules.respectFullScreen = respectFullScreen
+        rules.respectMirroring = respectMirroring
+        return rules
+    }
+
+    /// How dark the sky is at the user's location right now (0 day, 1 night).
+    var skyDarkness: Double {
+        guard let here = effectiveLocation else { return 0 }
+        return Sun.darkness(at: here, date: Date())
+    }
+
     private func flyIfClose(_ item: OverheadAircraft) {
         guard isLive, flyoverEnabled else { return }
         let now = Date()
@@ -316,20 +353,47 @@ final class AppModel {
             lastShown: flyoverShown[item.id],
             now: now
         ) else { return }
-        if FlyoverController.shared.fly(FlyoverInfo(item)) {
-            flyoverShown[item.id] = now
-            flyoverShown = flyoverShown.filter { now.timeIntervalSince($0.value) < FlyoverPolicy.repeatInterval }
-            log.notice("flyover: \(item.tailNumber, privacy: .public)")
+
+        // Held back? The menu bar item and the card carry on as usual.
+        if let block = flyoverRules.block(SystemState.conditions(now: now)) {
+            if flyoverBlock != block { log.notice("flyover held: \(block.rawValue, privacy: .public)") }
+            flyoverBlock = block
+            return
+        }
+        flyoverBlock = nil
+        guard !FlyoverController.shared.isFlying else { return }
+
+        flyoverShown[item.id] = now
+        flyoverShown = flyoverShown.filter { now.timeIntervalSince($0.value) < FlyoverPolicy.repeatInterval }
+        let darkness = skyDarkness
+        Task { [weak self] in
+            guard let self else { return }
+            var route: FlightRoute?
+            if let callsign = item.aircraft.callsign, let position = item.aircraft.coordinate {
+                route = await self.routes.route(callsign: callsign, position: position)
+            }
+            let info = FlyoverInfo(item, route: route, darkness: darkness)
+            if FlyoverController.shared.fly(info) {
+                log.notice("flyover: \(item.tailNumber, privacy: .public) as \(info.shape.rawValue, privacy: .public), banner \(info.banner == nil ? "no" : "yes", privacy: .public)")
+            } else {
+                self.flyoverShown[item.id] = nil
+            }
         }
     }
 
-    /// Plays the animation now, for the aircraft overhead or a sample one.
-    func previewFlyover() {
-        let info = overhead.map(FlyoverInfo.init) ?? FlyoverInfo(
-            shape: .businessJet, title: "N628TS", subtitle: "2015 Gulfstream G650ER",
-            leftToRight: true, duration: 9, trend: .level, contrail: true
-        )
-        FlyoverController.shared.fly(info)
+    /// Plays a flyover now, whatever the quiet rules say.
+    func playPreview(_ preview: FlyoverPreview) {
+        FlyoverController.shared.fly(preview.info(automaticDarkness: skyDarkness))
+    }
+
+    func refreshFocusAccess() {
+        focusAccess = SystemState.focusAccess
+    }
+
+    func requestFocusAccess() {
+        Task {
+            focusAccess = await SystemState.requestFocusAccess()
+        }
     }
 
     // MARK: FAA registry

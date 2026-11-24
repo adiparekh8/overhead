@@ -385,6 +385,13 @@ struct CardView: View {
             }
             Spacer()
             Button {
+                model.flyoversPaused.toggle()
+            } label: {
+                Image(systemName: model.flyoversPaused ? "airplane.circle" : "pause.circle")
+            }
+            .help(model.flyoversPaused ? "Resume flyovers" : "Pause flyovers")
+            .accessibilityLabel(model.flyoversPaused ? "Resume flyovers" : "Pause flyovers")
+            Button {
                 NSApp.activate(ignoringOtherApps: true)
                 openSettings()
             } label: {
@@ -414,6 +421,7 @@ struct CardView: View {
             case .quotaReached: return "Daily request limit reached"
             default: break
             }
+            if model.flyoversPaused { return "Flyovers paused" }
             guard let last = model.lastUpdate else { return "" }
             let age = Int(max(0, now.timeIntervalSince(last)))
             let ago = age < 5 ? "Updated just now" : age < 60 ? "Updated \(age)s ago" : "Updated \(age / 60)m ago"

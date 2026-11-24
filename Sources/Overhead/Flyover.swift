@@ -2,126 +2,142 @@ import AppKit
 import OverheadCore
 import SwiftUI
 
-/// Everything needed to animate one aircraft across the screen.
-struct FlyoverInfo: Equatable {
-    var shape: AircraftShape
-    /// "N628TS"
-    var title: String
-    /// "2015 Gulfstream G650ER"
-    var subtitle: String
-    var leftToRight: Bool
-    var duration: TimeInterval
-    var trend: VerticalTrend
-    /// High-altitude jets leave a contrail.
-    var contrail: Bool
-
-    init(_ item: OverheadAircraft) {
+extension FlyoverInfo {
+    /// Builds the flyover for a real aircraft.
+    init(_ item: OverheadAircraft, route: FlightRoute?, darkness: Double) {
         let aircraft = item.aircraft
-        shape = AircraftShape.classify(typeCode: aircraft.typeCode, category: aircraft.category)
-        title = item.tailNumber
-        subtitle = item.typeLine
+        let airline = aircraft.callsign.map(Callsign.init)?.airline
+        let tail = item.record?.nNumber ?? aircraft.registration
+
+        shape = AircraftShape.classify(
+            typeCode: aircraft.typeCode, category: aircraft.category, cargoOperator: airline?.cargo ?? false
+        )
+        livery = Livery.choose(airline: airline, shape: shape, tailNumber: item.tailNumber)
+        label = FuselageLabel.text(isAirline: airline != nil, record: item.record, tailNumber: tail)
+        banner = BannerText.text(
+            callsign: aircraft.callsign, tailNumber: tail, route: route,
+            position: aircraft.coordinate, track: aircraft.heading
+        )
+        // Don't say the tail number twice when the banner already carries it.
+        if banner == item.tailNumber {
+            title = item.typeLine
+            subtitle = ""
+        } else {
+            title = item.tailNumber
+            subtitle = item.typeLine
+        }
         leftToRight = FlyoverPolicy.fliesLeftToRight(heading: aircraft.heading)
         duration = FlyoverPolicy.duration(groundSpeedKnots: aircraft.gs)
         trend = VerticalTrend(feetPerMinute: aircraft.verticalRate)
-        let isJet = ![AircraftShape.pistonSingle, .helicopter, .turboprop].contains(shape)
+        let isJet = ![AircraftShape.pistonSingle, .pistonTwin, .helicopter, .turboprop, .glider].contains(shape)
         contrail = isJet && item.nearby.altitudeFeet >= 26_000
-    }
-
-    init(shape: AircraftShape, title: String, subtitle: String, leftToRight: Bool,
-         duration: TimeInterval, trend: VerticalTrend, contrail: Bool) {
-        self.shape = shape; self.title = title; self.subtitle = subtitle
-        self.leftToRight = leftToRight; self.duration = duration; self.trend = trend
-        self.contrail = contrail
+        self.darkness = darkness
     }
 }
 
-/// The aircraft with its caption, as it appears on screen. Faces the
-/// direction of travel.
-struct FlyoverAircraftView: View {
-    let info: FlyoverInfo
-
-    static let contrailLength: CGFloat = 170
-
-    var planeWidth: CGFloat { AircraftSilhouette.displayWidth(for: info.shape) }
-    var planeHeight: CGFloat { planeWidth * AircraftSilhouette.unitSize.height / AircraftSilhouette.unitSize.width }
-    var totalWidth: CGFloat { planeWidth + (info.contrail ? Self.contrailLength : 0) }
-
-    var body: some View {
-        // Drawn nose-right, then mirrored for westbound aircraft.
-        HStack(spacing: -6) {
-            if info.contrail {
-                LinearGradient(
-                    colors: [.white.opacity(0), .white.opacity(0.75)],
-                    startPoint: .leading, endPoint: .trailing
-                )
-                .frame(width: Self.contrailLength, height: 2.5)
-                .clipShape(Capsule())
-                .blur(radius: 0.6)
-                .offset(y: planeHeight * 0.06)
-            }
-            AircraftSilhouette(shape: info.shape)
-                .fill(.white)
-                .frame(width: planeWidth, height: planeHeight)
-                // Nose up in a climb, down in a descent.
-                .rotationEffect(.degrees(info.trend == .climbing ? -5 : info.trend == .descending ? 4 : 0))
-                // The caption hangs centered under the aircraft, and may be wider than it.
-                .overlay(alignment: .bottom) {
-                    caption
-                        .scaleEffect(x: info.leftToRight ? 1 : -1, y: 1)
-                        .offset(y: Self.captionHeight + 5)
-                }
-        }
-        .scaleEffect(x: info.leftToRight ? 1 : -1, y: 1)
-        .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
-        .frame(width: totalWidth, height: planeHeight + Self.captionHeight + 5, alignment: .top)
+/// What the preview controls in Settings can ask for.
+struct FlyoverPreview: Equatable {
+    enum Sky: String, CaseIterable {
+        case automatic, day, dusk, night
+        var label: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
     }
 
-    static let captionHeight: CGFloat = 22
+    var shape: AircraftShape = .largeBusinessJet
+    /// "company", "individual", or an airline's ICAO code.
+    var paint = "company"
+    var sky: Sky = .automatic
+    var leftToRight = true
+    var banner = true
 
-    private var caption: some View {
-        HStack(spacing: 6) {
-            Text(info.title)
-                .font(.system(size: 11, weight: .bold))
-                .monospacedDigit()
-            Text(info.subtitle)
-                .font(.system(size: 11, weight: .medium))
-                .opacity(0.8)
+    static let sampleType: [AircraftShape: (code: String, name: String, tail: String)] = [
+        .superJumbo: ("A388", "Airbus A380-800", "N380XX"),
+        .jumbo: ("B748", "Boeing 747-8", "N863GT"),
+        .quadWidebody: ("A343", "Airbus A340-300", "N340XX"),
+        .widebody: ("B77W", "Boeing 777-300ER", "N2749U"),
+        .cargoWidebody: ("B77L", "Boeing 777F", "N885FD"),
+        .narrowbody: ("B38M", "2021 Boeing 737-8", "N8880G"),
+        .rearEngineJet: ("CRJ7", "Bombardier CRJ-700", "N548CA"),
+        .turboprop: ("DH8D", "De Havilland Dash 8-400", "N435QX"),
+        .largeBusinessJet: ("GLF6", "2015 Gulfstream G650ER", "N628TS"),
+        .smallBusinessJet: ("C25B", "Cessna Citation CJ3", "N525CJ"),
+        .pistonSingle: ("C172", "2003 Cessna 172S", "N172SP"),
+        .pistonTwin: ("BE58", "Beechcraft Baron 58", "N58BE"),
+        .helicopter: ("R44", "Robinson R44 II", "N44PD"),
+        .fighter: ("F16", "General Dynamics F-16C", "AF87"),
+        .militaryTransport: ("C17", "Boeing C-17A Globemaster III", "RCH871"),
+        .glider: ("GLID", "Schleicher ASK 21", "N21GL"),
+    ]
+
+    func info(automaticDarkness: Double) -> FlyoverInfo {
+        let sample = Self.sampleType[shape] ?? ("", shape.rawValue, "N12345")
+        let airline = Airline.find(icao: paint)
+        let darkness: Double
+        switch sky {
+        case .automatic: darkness = automaticDarkness
+        case .day: darkness = 0
+        case .dusk: darkness = 0.5
+        case .night: darkness = 1
         }
-        .lineLimit(1)
-        .fixedSize()
-        .foregroundStyle(.white)
-        .padding(.horizontal, 9)
-        .frame(height: Self.captionHeight)
-        .background(.black.opacity(0.55), in: Capsule())
+
+        let livery: Livery
+        let label: String?
+        var bannerText: String?
+        if let airline {
+            livery = airline.livery
+            label = nil
+            bannerText = "\(airline.iata)512 · San Francisco → Newark"
+        } else {
+            livery = Livery.choose(airline: nil, shape: shape, tailNumber: sample.tail)
+            let owner = paint == "company" ? "FALCON LANDING LLC" : "BENE MARY D"
+            let record = RegistryRecord(
+                nNumber: sample.tail, owner: owner, registrantType: paint == "company" ? "LLC" : "Individual",
+                city: "", state: "", manufacturer: "", model: "", year: ""
+            )
+            label = FuselageLabel.text(isAirline: false, record: record, tailNumber: sample.tail)
+            bannerText = sample.tail
+        }
+        if !banner { bannerText = nil }
+        let tailShown = bannerText == sample.tail
+        return FlyoverInfo(
+            shape: shape, livery: livery, label: label,
+            title: tailShown ? sample.name : sample.tail, subtitle: tailShown ? "" : sample.name,
+            banner: bannerText, leftToRight: leftToRight, duration: 10, trend: .level,
+            contrail: false, darkness: darkness
+        )
     }
 }
 
-/// Moves the aircraft from one edge of the strip to the other.
+/// Moves the scene from one edge of the strip to the other. The timeline
+/// only exists while a flyover is on screen, so nothing is drawn (and no
+/// CPU is used) the rest of the time.
 private struct FlyoverStrip: View {
     let info: FlyoverInfo
     let reduceMotion: Bool
-    @State private var progress: CGFloat = 0
+    let started = Date()
     @State private var opacity: Double = 0
 
     var body: some View {
         GeometryReader { geometry in
-            let plane = FlyoverAircraftView(info: info)
-            // Room for a caption wider than the aircraft.
-            let margin: CGFloat = 170
-            let from = info.leftToRight ? -plane.totalWidth - margin : geometry.size.width + margin
-            let to = info.leftToRight ? geometry.size.width + margin : -plane.totalWidth - margin
-            let still = (geometry.size.width - plane.totalWidth) / 2
-            plane
-                .offset(x: reduceMotion ? still : from + (to - from) * progress, y: 16)
-                .opacity(reduceMotion ? opacity : 1)
-        }
-        .onAppear {
+            let layout = FlyoverLayout(info)
             if reduceMotion {
                 // No movement: fade in at the top of the screen, then out.
-                withAnimation(.easeInOut(duration: 0.6)) { opacity = 1 }
-                withAnimation(.easeInOut(duration: 0.6).delay(max(1, info.duration - 1.2))) { opacity = 0 }
+                FlyoverSceneView(info: info, time: 0)
+                    .offset(x: (geometry.size.width - layout.size.width) / 2, y: 4)
+                    .opacity(opacity)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 0.6)) { opacity = 1 }
+                        withAnimation(.easeInOut(duration: 0.6).delay(max(1, info.duration - 1.2))) { opacity = 0 }
+                    }
             } else {
-                withAnimation(.linear(duration: info.duration)) { progress = 1 }
+                // 60 frames a second is plenty, also on a 120 Hz display.
+                TimelineView(.animation(minimumInterval: 1.0 / 60)) { timeline in
+                    let elapsed = timeline.date.timeIntervalSince(started)
+                    let progress = min(1, max(0, elapsed / info.duration))
+                    let from = info.leftToRight ? -layout.size.width : geometry.size.width
+                    let to = info.leftToRight ? geometry.size.width : -layout.size.width
+                    FlyoverSceneView(info: info, time: elapsed)
+                        .offset(x: from + (to - from) * progress, y: 4)
+                }
             }
         }
     }
@@ -143,7 +159,7 @@ final class FlyoverController {
         guard !isFlying, let screen = NSScreen.screens.first else { return false }
         isFlying = true
 
-        let height: CGFloat = 130
+        let height = FlyoverLayout(info).size.height + 12
         let visible = screen.visibleFrame
         let frame = NSRect(x: screen.frame.minX, y: visible.maxY - height, width: screen.frame.width, height: height)
 
@@ -170,6 +186,7 @@ final class FlyoverController {
         hideTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(info.duration + 0.4))
             guard let self, !Task.isCancelled else { return }
+            // Removing the content stops the timeline and all drawing.
             self.panel?.orderOut(nil)
             self.panel?.contentView = nil
             self.isFlying = false

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var model: AppModel
+    @State private var preview = FlyoverPreview()
 
     var body: some View {
         Form {
@@ -31,11 +32,89 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(!model.flyoverEnabled)
-                Button("Preview") { model.previewFlyover() }
             } header: {
                 Text("Flyover")
             } footer: {
-                Text("Each aircraft is shown once, flying in the direction it is actually heading. Clicks pass through it.")
+                Text("Each aircraft is shown once, painted in its airline's colors and flying the way it is really heading. Clicks pass through it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Section {
+                Toggle("Pause flyovers", isOn: $model.flyoversPaused)
+                Toggle("Quiet hours", isOn: $model.quietHoursEnabled)
+                if model.quietHoursEnabled {
+                    DatePicker("From", selection: minutes($model.quietStartMinutes), displayedComponents: .hourAndMinute)
+                    DatePicker("Until", selection: minutes($model.quietEndMinutes), displayedComponents: .hourAndMinute)
+                }
+                Toggle("Not while an app is in full screen", isOn: $model.respectFullScreen)
+                Toggle("Not while the display is mirrored", isOn: $model.respectMirroring)
+                Toggle("Not while a Focus is on", isOn: $model.respectFocus)
+                if model.respectFocus {
+                    LabeledContent("Focus access") {
+                        HStack {
+                            Text(model.focusAccess.explanation)
+                                .foregroundStyle(.secondary)
+                            if model.focusAccess == .notAsked {
+                                Button("Allow…") { model.requestFocusAccess() }
+                            }
+                        }
+                    }
+                }
+                if let block = model.flyoverBlock {
+                    LabeledContent("Last flyover held") {
+                        Text(block.explanation).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Quiet")
+            } footer: {
+                Text("""
+                    Focus: macOS asks your permission before an app can see whether a Focus is on. Press Allow and \
+                    approve the prompt; until then Overhead cannot tell. It also only sees a Focus that has \
+                    Share Focus Status switched on in System Settings.
+                    Screen sharing: macOS gives apps no way to know that another app is sharing or recording the \
+                    screen, so Overhead cannot hold back for that. It can only detect a mirrored display. \
+                    Use Pause before a call.
+                    While flyovers are held back the menu bar item keeps updating.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Section {
+                Picker("Aircraft", selection: $preview.shape) {
+                    ForEach(AircraftShape.allCases, id: \.self) { shape in
+                        Text(FlyoverPreview.sampleType[shape]?.name ?? shape.rawValue).tag(shape)
+                    }
+                }
+                Picker("Paint", selection: $preview.paint) {
+                    Text("Private, company owner").tag("company")
+                    Text("Private, individual owner").tag("individual")
+                    Divider()
+                    ForEach(Airline.all.sorted { $0.name < $1.name }, id: \.icao) { airline in
+                        Text(airline.name).tag(airline.icao)
+                    }
+                }
+                Picker("Sky", selection: $preview.sky) {
+                    ForEach(FlyoverPreview.Sky.allCases, id: \.self) { sky in
+                        Text(sky.label).tag(sky)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Direction", selection: $preview.leftToRight) {
+                    Text("Eastbound").tag(true)
+                    Text("Westbound").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Toggle("Tow a banner", isOn: $preview.banner)
+                Button("Play") { model.playPreview(preview) }
+            } header: {
+                Text("Preview flyover")
+            } footer: {
+                Text("Plays any combination now, ignoring the quiet rules. Automatic sky uses the sun's position at your location.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -115,8 +194,20 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 480, height: 640)
+        .onAppear { model.refreshFocusAccess() }
+    }
+
+    /// Bridges minutes after midnight to the Date a time picker wants.
+    private func minutes(_ value: Binding<Int>) -> Binding<Date> {
+        Binding<Date>(
+            get: {
+                Calendar.current.date(
+                    bySettingHour: value.wrappedValue / 60, minute: value.wrappedValue % 60, second: 0, of: Date()
+                ) ?? Date()
+            },
+            set: { value.wrappedValue = QuietHours.minuteOfDay(for: $0) }
+        )
     }
 
     private var locationStatusText: String {
